@@ -952,29 +952,85 @@ class App(tk.Tk):
         self.stree.pack(fill="both",expand=True)
 
     # ======================== OPEN EXCEL LOAD ========================
-    def _load_open_excel(self):
-        """열려 있는 엑셀 파일 목록 감지 → 선택 팝업 → 읽기"""
-        import os, threading as _th, traceback as _tb
-        import tempfile as _tf, shutil as _sh
-        fn = FN
-
-        # ── STEP 1. 열린 파일 목록 수집 ───────────────────────────
+    def _get_open_books(self):
+        """열린 Excel 파일 목록 반환 (Mac: AppleScript 우선 → xlwings, Win: xlwings → win32com)"""
         books = []
-        try:
-            import xlwings as xw
-            for _a in xw.apps:
-                for _w in _a.books:
-                    try:
-                        books.append({"source":"xlwings","app":_a,"wb":_w,
-                                      "name":_w.name,"path":_w.fullname,
-                                      "sheets":[s.name for s in _w.sheets]})
-                    except Exception: pass
-        except Exception: pass
 
+        # ── Mac: AppleScript (가장 신뢰성 높음) ──────────────────
+        if IS_MAC:
+            try:
+                script = (
+                    'tell application "Microsoft Excel"\n'
+                    '  set out to ""\n'
+                    '  repeat with wb in workbooks\n'
+                    '    set wn to name of wb\n'
+                    '    try\n'
+                    '      set wp to full name of wb as string\n'
+                    '    on error\n'
+                    '      set wp to ""\n'
+                    '    end try\n'
+                    '    set out to out & wn & "|||" & wp & "\n"\n'
+                    '  end repeat\n'
+                    '  return out\n'
+                    'end tell'
+                )
+                r = subprocess.run(['osascript','-e',script],
+                                   capture_output=True,text=True,timeout=6)
+                if r.returncode==0 and r.stdout.strip():
+                    # xlwings 객체 맵 (시트 목록용)
+                    xw_map = {}
+                    try:
+                        import xlwings as _xwt
+                        for _a in _xwt.apps:
+                            for _w in _a.books:
+                                xw_map[_w.name] = _w
+                    except Exception: pass
+
+                    for line in r.stdout.strip().split('\n'):
+                        if '|||' not in line: continue
+                        name, path = line.split('|||',1)
+                        name=name.strip(); path=path.strip()
+                        # Mac 콜론 경로 → POSIX 변환
+                        if path and ':' in path and not path.startswith('/'):
+                            try:
+                                pr=subprocess.run(
+                                    ['osascript','-e',f'POSIX path of "{path}"'],
+                                    capture_output=True,text=True,timeout=3)
+                                if pr.returncode==0: path=pr.stdout.strip()
+                            except Exception: pass
+                        wb_obj = xw_map.get(name)
+                        sheets = []
+                        if wb_obj:
+                            try: sheets=[s.name for s in wb_obj.sheets]
+                            except Exception: pass
+                        if not sheets and path and os.path.exists(path):
+                            try:
+                                sheets=pd.ExcelFile(path,engine='openpyxl').sheet_names
+                            except Exception: sheets=['Sheet1']
+                        if not sheets: sheets=['Sheet1']
+                        books.append({"source":"applescript","app":None,
+                                      "wb":wb_obj,"name":name,"path":path,
+                                      "sheets":sheets})
+            except Exception: pass
+
+        # ── xlwings (Mac fallback / Win primary) ─────────────────
+        if not books:
+            try:
+                import xlwings as xw
+                for _a in xw.apps:
+                    for _w in _a.books:
+                        try:
+                            books.append({"source":"xlwings","app":_a,"wb":_w,
+                                          "name":_w.name,"path":_w.fullname,
+                                          "sheets":[s.name for s in _w.sheets]})
+                        except Exception: pass
+            except Exception: pass
+
+        # ── Win32COM (Windows 최후 수단) ──────────────────────────
         if IS_WIN and not books:
             try:
                 import win32com.client as _c
-                _xl = _c.GetActiveObject("Excel.Application")
+                _xl=_c.GetActiveObject("Excel.Application")
                 for _w in _xl.Workbooks:
                     try:
                         books.append({"source":"win32com","app":None,"wb":None,
@@ -983,6 +1039,17 @@ class App(tk.Tk):
                                                 for i in range(_w.Sheets.Count)]})
                     except Exception: pass
             except Exception: pass
+
+        return books
+
+    def _load_open_excel(self):
+        """열려 있는 엑셀 파일 목록 감지 → 선택 팝업 → 읽기"""
+        import os, threading as _th, traceback as _tb
+        import tempfile as _tf, shutil as _sh
+        fn = FN
+
+        # ── STEP 1. 열린 파일 목록 수집 ───────────────────────────
+        books = self._get_open_books()
 
         if not books:
             messagebox.showwarning("열린 엑셀 없음",
@@ -2911,6 +2978,8 @@ class App(tk.Tk):
                    command=self._match_use_current).pack(side="left")
         ttk.Button(af,text=" 찾아보기",style="Sm.TButton",
                    command=lambda:self._match_browse("a")).pack(side="left",padx=6)
+        ttk.Button(af,text=" 열린 파일",style="Green.TButton",
+                   command=lambda:self._match_pick_open("a")).pack(side="left")
         self.lbl_ma=tk.Label(af,text="(없음)",bg=C["card"],fg=C["cyan"],font=(FN,9))
         self.lbl_ma.pack(side="left",padx=8)
 
@@ -2921,6 +2990,8 @@ class App(tk.Tk):
         bf2=tk.Frame(bc,bg=C["card"]); bf2.pack(fill="x",padx=12,pady=(0,8))
         ttk.Button(bf2,text=" 찾아보기",style="Sm.TButton",
                    command=lambda:self._match_browse("b")).pack(side="left")
+        ttk.Button(bf2,text=" 열린 파일",style="Green.TButton",
+                   command=lambda:self._match_pick_open("b")).pack(side="left",padx=6)
         self.lbl_mb=tk.Label(bf2,text="(없음)",bg=C["card"],fg=C["cyan"],font=(FN,9))
         self.lbl_mb.pack(side="left",padx=8)
         tk.Label(bf2,text="시트:",bg=C["card"],fg=C["muted"],font=(FN,9)).pack(side="left",padx=(16,4))
@@ -2988,6 +3059,107 @@ class App(tk.Tk):
 
         self._match_df_a=None; self._match_df_b=None
         self._match_result=None; self._match_b_xl=None
+
+    def _match_pick_open(self, which):
+        """열려있는 Excel 파일 목록 팝업 → A 또는 B로 로드"""
+        books = self._get_open_books()
+        if not books:
+            messagebox.showwarning("열린 파일 없음",
+                "Excel 파일이 열려 있지 않습니다.\n"
+                "Excel에서 파일을 먼저 열어주세요.")
+            return
+
+        pop = tk.Toplevel(self)
+        pop.title("열린 Excel 파일 선택")
+        pop.configure(bg=C["surface"])
+        pop.geometry("560x360")
+        pop.resizable(False, False)
+        pop.transient(self); pop.grab_set(); pop.lift(); pop.focus_force()
+
+        lbl_title = "A 파일 (기준)" if which == "a" else "B 파일 (참조)"
+        tk.Label(pop, text=f"{lbl_title}  —  열려있는 파일 선택",
+                 bg=C["surface"], fg=C["text"],
+                 font=(FN,11,"bold")).pack(pady=(14,6), padx=16, anchor="w")
+
+        # 파일 목록
+        lf = tk.Frame(pop, bg=C["card"]); lf.pack(fill="x", padx=16)
+        lb = tk.Listbox(lf, bg=C["card2"], fg=C["text2"],
+                        selectbackground=C["accent"],
+                        font=(FN,10), height=min(8, len(books)),
+                        activestyle="none")
+        for bk in books:
+            lb.insert("end", f"  {bk['name']}  [{bk['source']}]  {bk['path']}")
+        lb.pack(fill="x", expand=True)
+        if books: lb.select_set(0)
+
+        # 시트 선택
+        sf = tk.Frame(pop, bg=C["surface"]); sf.pack(fill="x", padx=16, pady=(10,4))
+        tk.Label(sf, text="시트:", bg=C["surface"], fg=C["muted"],
+                 font=(FN,9)).pack(side="left")
+        cmb_sh2 = ttk.Combobox(sf, state="readonly", width=20)
+        cmb_sh2.pack(side="left", padx=6)
+
+        def _on_sel(e=None):
+            idx = lb.curselection()
+            if not idx: return
+            bk = books[idx[0]]
+            cmb_sh2["values"] = bk["sheets"]
+            cmb_sh2.set(bk["sheets"][0] if bk["sheets"] else "")
+        lb.bind("<<ListboxSelect>>", _on_sel)
+        _on_sel()
+
+        def _load():
+            idx = lb.curselection()
+            if not idx:
+                messagebox.showwarning("주의","파일을 선택하세요.",parent=pop); return
+            bk = books[idx[0]]
+            sh = cmb_sh2.get() or (bk["sheets"][0] if bk["sheets"] else "Sheet1")
+            try:
+                fp = bk.get("path","")
+                df = None
+                # 경로로 읽기 시도
+                if fp and os.path.exists(fp):
+                    ext = os.path.splitext(fp)[1].lower()
+                    if ext in (".xlsx",".xlsm"):
+                        df = pd.ExcelFile(fp, engine="openpyxl").parse(sh)
+                    elif ext == ".xls":
+                        df = pd.ExcelFile(fp, engine="xlrd").parse(sh)
+                # xlwings 로 읽기 (파일 저장 안 된 경우)
+                if df is None and bk.get("wb"):
+                    ws = bk["wb"].sheets[sh]
+                    data = ws.used_range.value
+                    if data and isinstance(data[0], list):
+                        df = pd.DataFrame(data[1:], columns=data[0])
+                    elif data:
+                        df = pd.DataFrame(data)
+                if df is None:
+                    raise ValueError("파일을 읽을 수 없습니다.")
+                df = self._clean(df)
+                if which == "a":
+                    self._match_df_a = df
+                    self.lbl_ma.config(text=f"{bk['name']} / {sh}  ({len(df):,}행)")
+                    self._match_refresh_combos("a")
+                else:
+                    self._match_df_b = df
+                    self.lbl_mb.config(text=f"{bk['name']} / {sh}  ({len(df):,}행)")
+                    self.cmb_bsh["values"] = bk["sheets"]
+                    self.cmb_bsh.set(sh)
+                    self._match_refresh_combos("b")
+                    self.lb_match_cols.delete(0,"end")
+                    for c in df.columns: self.lb_match_cols.insert("end",c)
+                pop.destroy()
+                self._st(f"매칭 {'A' if which=='a' else 'B'} 파일 로드: {bk['name']} / {sh}", C["teal"])
+            except Exception as e:
+                messagebox.showerror("오류",str(e),parent=pop)
+
+        bf = tk.Frame(pop, bg=C["surface"]); bf.pack(pady=10)
+        ttk.Button(bf, text="  선택  ", command=_load).pack(side="left", padx=6, ipadx=8, ipady=4)
+        ttk.Button(bf, text="취소", style="Flat.TButton",
+                   command=pop.destroy).pack(side="left", padx=6)
+        ttk.Button(bf, text=" 새로고침", style="Flat.TButton",
+                   command=lambda: (pop.destroy(),
+                                    self.after(80, lambda: self._match_pick_open(which)))
+                   ).pack(side="left", padx=6)
 
     def _match_use_current(self):
         if self.df_raw is None:
