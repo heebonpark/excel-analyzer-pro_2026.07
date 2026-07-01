@@ -3086,7 +3086,7 @@ class App(tk.Tk):
         lb = tk.Listbox(lf, bg=C["card2"], fg=C["text2"],
                         selectbackground=C["accent"],
                         font=(FN,10), height=min(8, len(books)),
-                        activestyle="none")
+                        activestyle="none", exportselection=False)
         for bk in books:
             lb.insert("end", f"  {bk['name']}  [{bk['source']}]  {bk['path']}")
         lb.pack(fill="x", expand=True)
