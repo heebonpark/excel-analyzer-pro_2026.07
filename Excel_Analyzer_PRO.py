@@ -3123,44 +3123,86 @@ class App(tk.Tk):
         if books:
             _pick(books[0])
 
+        def _xw_to_df(data):
+            """xlwings used_range.value → DataFrame (2D/1D/스칼라 모두 처리)"""
+            if data is None:
+                return pd.DataFrame()
+            if not isinstance(data, list):
+                return pd.DataFrame([[data]], columns=["값"])
+            if not data:
+                return pd.DataFrame()
+            if isinstance(data[0], list):
+                # 2D: 첫 행 = 헤더
+                hdrs=[str(v) if v is not None else f"_col{i}"
+                      for i,v in enumerate(data[0])]
+                return pd.DataFrame(data[1:], columns=hdrs)
+            else:
+                # 1D: 단일 행 → 헤더만 존재
+                hdrs=[str(v) if v is not None else f"_col{i}"
+                      for i,v in enumerate(data)]
+                return pd.DataFrame([], columns=hdrs)
+
         def _load():
             bk = cur["bk"]
             if bk is None:
                 messagebox.showwarning("주의","파일을 선택하세요.",parent=pop); return
             sh = cmb_sh2.get() or (bk["sheets"][0] if bk["sheets"] else "Sheet1")
-            try:
-                fp = bk.get("path","")
-                df = None
+            errs=[]; df=None
+
+            # 1순위: xlwings 직접 읽기 (파일 열려있음 → 가장 신뢰성 높음)
+            if bk.get("wb"):
+                try:
+                    ws=bk["wb"].sheets[sh]
+                    df=_xw_to_df(ws.used_range.value)
+                except Exception as e:
+                    errs.append(f"xlwings: {e}")
+
+            # 2순위: pandas 파일 경로 읽기
+            if df is None or df.empty:
+                fp=bk.get("path","").strip()
+                # Mac HFS+ 경로 → POSIX 변환 시도
+                if fp and ':' in fp and not fp.startswith('/'):
+                    try:
+                        r2=subprocess.run(['osascript','-e',
+                                           f'POSIX path of "{fp}"'],
+                                          capture_output=True,text=True,timeout=3)
+                        if r2.returncode==0: fp=r2.stdout.strip()
+                    except Exception: pass
                 if fp and os.path.exists(fp):
-                    ext = os.path.splitext(fp)[1].lower()
-                    if ext in (".xlsx",".xlsm"):
-                        df = pd.ExcelFile(fp, engine="openpyxl").parse(sh)
-                    elif ext == ".xls":
-                        df = pd.ExcelFile(fp, engine="xlrd").parse(sh)
-                if df is None and bk.get("wb"):
-                    ws = bk["wb"].sheets[sh]
-                    data = ws.used_range.value
-                    if data and isinstance(data[0], list):
-                        df = pd.DataFrame(data[1:], columns=data[0])
-                    elif data:
-                        df = pd.DataFrame(data)
-                if df is None:
-                    raise ValueError("파일을 읽을 수 없습니다.\n경로: " + fp)
-                df = self._clean(df)
-                if which == "a":
-                    self._match_df_a = df
+                    try:
+                        ext=os.path.splitext(fp)[1].lower()
+                        if ext in(".xlsx",".xlsm"):
+                            df=pd.ExcelFile(fp,engine="openpyxl").parse(sh)
+                        elif ext==".xls":
+                            df=pd.ExcelFile(fp,engine="xlrd").parse(sh)
+                        else:
+                            df=Loader._csv(fp,self.cmb_enc.get(),0)
+                    except Exception as e:
+                        errs.append(f"파일읽기({fp}): {e}")
+                else:
+                    errs.append(f"경로없음: '{fp}'")
+
+            if df is None or (hasattr(df,'empty') and df.empty and len(df.columns)==0):
+                msg="파일 읽기 실패\n\n"+"\n".join(errs)
+                msg+="\n\n[찾아보기] 버튼으로 직접 파일을 선택해 주세요."
+                messagebox.showerror("오류",msg,parent=pop); return
+
+            try:
+                df=self._clean(df)
+                if which=="a":
+                    self._match_df_a=df
                     self.lbl_ma.config(text=f"{bk['name']} / {sh}  ({len(df):,}행)")
                     self._match_refresh_combos("a")
                 else:
-                    self._match_df_b = df
+                    self._match_df_b=df
                     self.lbl_mb.config(text=f"{bk['name']} / {sh}  ({len(df):,}행)")
-                    self.cmb_bsh["values"] = bk["sheets"]
+                    self.cmb_bsh["values"]=bk["sheets"]
                     self.cmb_bsh.set(sh)
                     self._match_refresh_combos("b")
                     self.lb_match_cols.delete(0,"end")
                     for c in df.columns: self.lb_match_cols.insert("end",c)
                 pop.destroy()
-                self._st(f"매칭 {'A' if which=='a' else 'B'} 파일 로드: {bk['name']} / {sh}", C["teal"])
+                self._st(f"매칭 {'A' if which=='a' else 'B'} 파일 로드: {bk['name']} / {sh}",C["teal"])
             except Exception as e:
                 messagebox.showerror("오류",str(e),parent=pop)
 
@@ -3187,36 +3229,62 @@ class App(tk.Tk):
         if not p: return
         try:
             ext=os.path.splitext(p)[1].lower()
+            enc=self.cmb_enc.get()  # 인코딩 사이드바 설정 사용
+
+            if ext in(".xlsx",".xlsm"):
+                xl=pd.ExcelFile(p,engine="openpyxl")
+                sheets=xl.sheet_names
+            elif ext==".xls":
+                xl=pd.ExcelFile(p,engine="xlrd")
+                sheets=xl.sheet_names
+            else:
+                xl=None; sheets=["Sheet1"]
+
+            # 시트 선택 (다중 시트이거나 B파일인 경우 팝업)
+            chosen_sh=sheets[0]
+            if len(sheets)>1:
+                chosen_sh=self._match_pick_sheet(sheets,os.path.basename(p)) or sheets[0]
+
+            if xl is not None:
+                df=xl.parse(chosen_sh)
+            else:
+                df=Loader._csv(p,enc,0)
+
+            df=self._clean(df)
+            name=os.path.basename(p)
             if which=="a":
-                if ext in(".xlsx",".xlsm"):   df=pd.ExcelFile(p,engine="openpyxl").parse(0)
-                elif ext==".xls":              df=pd.ExcelFile(p,engine="xlrd").parse(0)
-                else:                          df=Loader._csv(p,"utf-8",0)
-                self._match_df_a=self._clean(df)
-                self.lbl_ma.config(text=f"{os.path.basename(p)}  ({len(df):,}행)")
+                self._match_df_a=df
+                self.lbl_ma.config(text=f"{name} / {chosen_sh}  ({len(df):,}행)")
                 self._match_refresh_combos("a")
             else:
-                if ext in(".xlsx",".xlsm"):
-                    xl=pd.ExcelFile(p,engine="openpyxl")
-                    self._match_b_xl=xl
-                    self.cmb_bsh["values"]=xl.sheet_names
-                    self.cmb_bsh.set(xl.sheet_names[0])
-                    df=xl.parse(xl.sheet_names[0])
-                elif ext==".xls":
-                    xl=pd.ExcelFile(p,engine="xlrd")
-                    self._match_b_xl=xl
-                    self.cmb_bsh["values"]=xl.sheet_names
-                    self.cmb_bsh.set(xl.sheet_names[0])
-                    df=xl.parse(xl.sheet_names[0])
-                else:
-                    self._match_b_xl=None
-                    self.cmb_bsh["values"]=["Sheet1"]; self.cmb_bsh.set("Sheet1")
-                    df=Loader._csv(p,"utf-8",0)
-                self._match_df_b=self._clean(df)
-                self.lbl_mb.config(text=f"{os.path.basename(p)}  ({len(df):,}행)")
+                self._match_df_b=df
+                self._match_b_xl=xl
+                if xl: self.cmb_bsh["values"]=sheets; self.cmb_bsh.set(chosen_sh)
+                else:  self.cmb_bsh["values"]=["Sheet1"]; self.cmb_bsh.set("Sheet1")
+                self.lbl_mb.config(text=f"{name} / {chosen_sh}  ({len(df):,}행)")
                 self._match_refresh_combos("b")
                 self.lb_match_cols.delete(0,"end")
                 for c in df.columns: self.lb_match_cols.insert("end",c)
         except Exception as e: messagebox.showerror("오류",str(e))
+
+    def _match_pick_sheet(self,sheets,title=""):
+        """시트 선택 미니 팝업 → 선택한 시트명 반환"""
+        result={"sh": sheets[0]}
+        pop=tk.Toplevel(self); pop.title("시트 선택")
+        pop.configure(bg=C["surface"]); pop.geometry("320x200")
+        pop.resizable(False,False); pop.transient(self); pop.grab_set()
+        tk.Label(pop,text=title,bg=C["surface"],fg=C["cyan"],
+                 font=(FN,9)).pack(pady=(10,2))
+        tk.Label(pop,text="시트를 선택하세요",bg=C["surface"],fg=C["text"],
+                 font=(FN,10,"bold")).pack()
+        var=tk.StringVar(value=sheets[0])
+        cmb=ttk.Combobox(pop,textvariable=var,values=sheets,state="readonly",width=26)
+        cmb.pack(pady=10)
+        def _ok():
+            result["sh"]=var.get(); pop.destroy()
+        ttk.Button(pop,text="  확인  ",command=_ok).pack(pady=4)
+        pop.wait_window()
+        return result["sh"]
 
     def _match_b_sheet_chg(self):
         if self._match_b_xl is None: return
