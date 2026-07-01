@@ -3230,8 +3230,8 @@ class App(tk.Tk):
 
     def _match_add_key(self):
         fr=tk.Frame(self._match_key_frame,bg=C["card"]); fr.pack(fill="x",pady=2)
-        a_cols=list(self._match_df_a.columns) if self._match_df_a else []
-        b_cols=list(self._match_df_b.columns) if self._match_df_b else []
+        a_cols=list(self._match_df_a.columns) if self._match_df_a is not None else []
+        b_cols=list(self._match_df_b.columns) if self._match_df_b is not None else []
         av=tk.StringVar(); bv=tk.StringVar()
         ca=ttk.Combobox(fr,textvariable=av,state="readonly",width=22,values=a_cols)
         ca.pack(side="left")
