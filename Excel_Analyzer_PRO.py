@@ -616,6 +616,7 @@ class App(tk.Tk):
         self.nb.pack(fill="both",expand=True,padx=6,pady=6)
         self._t_filter()
         self._t_merge()
+        self._t_match()
         self._t_replace()
         self._t_inspect()
         self._t_viz()
@@ -2896,6 +2897,228 @@ class App(tk.Tk):
         self._apply(self._mm_result,"다중파일 병합")
         self.nb.select(0)
         self._st("다중 병합 결과 → 현재 데이터 적용",C["green"])
+
+    # ======================== MATCH (VLOOKUP형 다중 조건 매칭) ========================
+    def _t_match(self):
+        tab=ttk.Frame(self.nb); self.nb.add(tab,text="  매칭  ")
+
+        # ── A 파일 ─────────────────────────────────────────
+        ac=tk.Frame(tab,bg=C["card"]); ac.pack(fill="x",padx=6,pady=(6,3))
+        tk.Label(ac,text="A 파일  (기준 데이터)",bg=C["card"],fg=C["text"],
+                 font=(FN,11,"bold")).pack(anchor="w",padx=12,pady=(8,4))
+        af=tk.Frame(ac,bg=C["card"]); af.pack(fill="x",padx=12,pady=(0,8))
+        ttk.Button(af,text="현재 파일 사용",style="Flat.TButton",
+                   command=self._match_use_current).pack(side="left")
+        ttk.Button(af,text=" 찾아보기",style="Sm.TButton",
+                   command=lambda:self._match_browse("a")).pack(side="left",padx=6)
+        self.lbl_ma=tk.Label(af,text="(없음)",bg=C["card"],fg=C["cyan"],font=(FN,9))
+        self.lbl_ma.pack(side="left",padx=8)
+
+        # ── B 파일 ─────────────────────────────────────────
+        bc=tk.Frame(tab,bg=C["card"]); bc.pack(fill="x",padx=6,pady=(0,3))
+        tk.Label(bc,text="B 파일  (참조 / 조회)",bg=C["card"],fg=C["text"],
+                 font=(FN,11,"bold")).pack(anchor="w",padx=12,pady=(8,4))
+        bf2=tk.Frame(bc,bg=C["card"]); bf2.pack(fill="x",padx=12,pady=(0,8))
+        ttk.Button(bf2,text=" 찾아보기",style="Sm.TButton",
+                   command=lambda:self._match_browse("b")).pack(side="left")
+        self.lbl_mb=tk.Label(bf2,text="(없음)",bg=C["card"],fg=C["cyan"],font=(FN,9))
+        self.lbl_mb.pack(side="left",padx=8)
+        tk.Label(bf2,text="시트:",bg=C["card"],fg=C["muted"],font=(FN,9)).pack(side="left",padx=(16,4))
+        self.cmb_bsh=ttk.Combobox(bf2,state="readonly",width=16)
+        self.cmb_bsh.pack(side="left")
+        self.cmb_bsh.bind("<<ComboboxSelected>>",lambda e:self._match_b_sheet_chg())
+
+        # ── 매칭 키 ────────────────────────────────────────
+        mc=tk.Frame(tab,bg=C["card"]); mc.pack(fill="x",padx=6,pady=(0,3))
+        mh=tk.Frame(mc,bg=C["card"]); mh.pack(fill="x",padx=12,pady=(8,4))
+        tk.Label(mh,text="매칭 키  (다중 조건 가능)",bg=C["card"],fg=C["text"],
+                 font=(FN,11,"bold")).pack(side="left")
+        ttk.Button(mh,text="＋ 키 추가",style="Flat.TButton",
+                   command=self._match_add_key).pack(side="left",padx=12)
+        kh=tk.Frame(mc,bg=C["card"]); kh.pack(fill="x",padx=12)
+        tk.Label(kh,text="A 컬럼",bg=C["card"],fg=C["muted"],font=(FN,9),width=22,anchor="w").pack(side="left")
+        tk.Label(kh,text="↔",bg=C["card"],fg=C["muted"],font=(FN,9),width=4).pack(side="left")
+        tk.Label(kh,text="B 컬럼",bg=C["card"],fg=C["muted"],font=(FN,9),width=22,anchor="w").pack(side="left")
+        self._match_key_frame=tk.Frame(mc,bg=C["card"])
+        self._match_key_frame.pack(fill="x",padx=12,pady=(2,8))
+        self._match_key_rows=[]  # [(a_var,b_var,a_cmb,b_cmb,frame), ...]
+
+        # ── 가져올 컬럼 ────────────────────────────────────
+        cc2=tk.Frame(tab,bg=C["card"]); cc2.pack(fill="x",padx=6,pady=(0,3))
+        ch=tk.Frame(cc2,bg=C["card"]); ch.pack(fill="x",padx=12,pady=(8,4))
+        tk.Label(ch,text="가져올 컬럼 선택  (B → A, 다중)",bg=C["card"],fg=C["text"],
+                 font=(FN,11,"bold")).pack(side="left")
+        ttk.Button(ch,text="전체 선택",style="Flat.TButton",
+                   command=lambda:self.lb_match_cols.select_set(0,"end")).pack(side="left",padx=8)
+        ttk.Button(ch,text="전체 해제",style="Flat.TButton",
+                   command=lambda:self.lb_match_cols.selection_clear(0,"end")).pack(side="left")
+        lbf2=tk.Frame(cc2,bg=C["card"]); lbf2.pack(fill="x",padx=12,pady=(0,8))
+        sb4=ttk.Scrollbar(lbf2,orient="vertical")
+        self.lb_match_cols=tk.Listbox(lbf2,selectmode="multiple",
+                                      bg=C["card2"],fg=C["text2"],
+                                      selectbackground=C["accent"],height=4,
+                                      font=(FN,9),yscrollcommand=sb4.set)
+        sb4.config(command=self.lb_match_cols.yview)
+        sb4.pack(side="right",fill="y")
+        self.lb_match_cols.pack(fill="x",expand=True)
+
+        # ── 실행 ───────────────────────────────────────────
+        xf=tk.Frame(tab,bg=C["card"]); xf.pack(fill="x",padx=6,pady=(0,3))
+        xb=tk.Frame(xf,bg=C["card"]); xb.pack(fill="x",padx=12,pady=(8,10))
+        ttk.Button(xb,text=" 매칭 실행",style="Teal.TButton",
+                   command=self._do_match).pack(side="left")
+        ttk.Button(xb,text="결과 저장",style="Green.TButton",
+                   command=self._save_match).pack(side="left",padx=6)
+        ttk.Button(xb,text="현재 데이터에 적용",style="Purple.TButton",
+                   command=self._apply_match).pack(side="left")
+        self.lbl_match_r=tk.Label(xb,text="",bg=C["card"],fg=C["cyan"],font=(FN,9))
+        self.lbl_match_r.pack(side="left",padx=10)
+
+        # ── 결과 미리보기 ──────────────────────────────────
+        tc2=tk.Frame(tab,bg=C["card"]); tc2.pack(fill="both",expand=True,padx=6,pady=(0,6))
+        tk.Label(tc2,text="매칭 결과 미리보기",bg=C["card"],fg=C["text"],
+                 font=(FN,10,"bold")).pack(anchor="w",padx=10,pady=(8,4))
+        mw2=tk.Frame(tc2,bg=C["card"]); mw2.pack(fill="both",expand=True,padx=8,pady=(0,8))
+        self.match_tree=VTree(mw2,show="headings")
+        mvsb2=ttk.Scrollbar(mw2,orient="vertical",command=self.match_tree.yview)
+        mhsb2=ttk.Scrollbar(mw2,orient="horizontal",command=self.match_tree.xview)
+        self.match_tree.configure(yscrollcommand=mvsb2.set,xscrollcommand=mhsb2.set)
+        mhsb2.pack(side="bottom",fill="x"); mvsb2.pack(side="right",fill="y")
+        self.match_tree.pack(fill="both",expand=True)
+
+        self._match_df_a=None; self._match_df_b=None
+        self._match_result=None; self._match_b_xl=None
+
+    def _match_use_current(self):
+        if self.df_raw is None:
+            messagebox.showwarning("주의","먼저 파일을 불러오세요."); return
+        self._match_df_a=self.df_view if self.df_view is not None else self.df_raw
+        name=os.path.basename(self.raw_path) if self.raw_path else "현재 파일"
+        self.lbl_ma.config(text=f"{name}  ({len(self._match_df_a):,}행)")
+        self._match_refresh_combos("a")
+
+    def _match_browse(self,which):
+        p=filedialog.askopenfilename(
+            filetypes=[("Excel/CSV","*.xlsx *.xls *.csv"),("All","*.*")])
+        if not p: return
+        try:
+            ext=os.path.splitext(p)[1].lower()
+            if which=="a":
+                if ext in(".xlsx",".xlsm"):   df=pd.ExcelFile(p,engine="openpyxl").parse(0)
+                elif ext==".xls":              df=pd.ExcelFile(p,engine="xlrd").parse(0)
+                else:                          df=Loader._csv(p,"utf-8",0)
+                self._match_df_a=self._clean(df)
+                self.lbl_ma.config(text=f"{os.path.basename(p)}  ({len(df):,}행)")
+                self._match_refresh_combos("a")
+            else:
+                if ext in(".xlsx",".xlsm"):
+                    xl=pd.ExcelFile(p,engine="openpyxl")
+                    self._match_b_xl=xl
+                    self.cmb_bsh["values"]=xl.sheet_names
+                    self.cmb_bsh.set(xl.sheet_names[0])
+                    df=xl.parse(xl.sheet_names[0])
+                elif ext==".xls":
+                    xl=pd.ExcelFile(p,engine="xlrd")
+                    self._match_b_xl=xl
+                    self.cmb_bsh["values"]=xl.sheet_names
+                    self.cmb_bsh.set(xl.sheet_names[0])
+                    df=xl.parse(xl.sheet_names[0])
+                else:
+                    self._match_b_xl=None
+                    self.cmb_bsh["values"]=["Sheet1"]; self.cmb_bsh.set("Sheet1")
+                    df=Loader._csv(p,"utf-8",0)
+                self._match_df_b=self._clean(df)
+                self.lbl_mb.config(text=f"{os.path.basename(p)}  ({len(df):,}행)")
+                self._match_refresh_combos("b")
+                self.lb_match_cols.delete(0,"end")
+                for c in df.columns: self.lb_match_cols.insert("end",c)
+        except Exception as e: messagebox.showerror("오류",str(e))
+
+    def _match_b_sheet_chg(self):
+        if self._match_b_xl is None: return
+        try:
+            df=self._match_b_xl.parse(self.cmb_bsh.get())
+            self._match_df_b=self._clean(df)
+            self.lbl_mb.config(text=f"{self.cmb_bsh.get()}  ({len(df):,}행)")
+            self._match_refresh_combos("b")
+            self.lb_match_cols.delete(0,"end")
+            for c in df.columns: self.lb_match_cols.insert("end",c)
+        except Exception as e: messagebox.showerror("오류",str(e))
+
+    def _match_refresh_combos(self,which):
+        a_cols=list(self._match_df_a.columns) if self._match_df_a is not None else []
+        b_cols=list(self._match_df_b.columns) if self._match_df_b is not None else []
+        for av,bv,ca,cb,_ in self._match_key_rows:
+            if which=="a":
+                ca["values"]=a_cols
+                if av.get() not in a_cols and a_cols: av.set(a_cols[0])
+            else:
+                cb["values"]=b_cols
+                if bv.get() not in b_cols and b_cols: bv.set(b_cols[0])
+
+    def _match_add_key(self):
+        fr=tk.Frame(self._match_key_frame,bg=C["card"]); fr.pack(fill="x",pady=2)
+        a_cols=list(self._match_df_a.columns) if self._match_df_a else []
+        b_cols=list(self._match_df_b.columns) if self._match_df_b else []
+        av=tk.StringVar(); bv=tk.StringVar()
+        ca=ttk.Combobox(fr,textvariable=av,state="readonly",width=22,values=a_cols)
+        ca.pack(side="left")
+        if a_cols: ca.set(a_cols[0])
+        tk.Label(fr,text=" ↔ ",bg=C["card"],fg=C["muted"],font=(FN,9)).pack(side="left")
+        cb=ttk.Combobox(fr,textvariable=bv,state="readonly",width=22,values=b_cols)
+        cb.pack(side="left")
+        if b_cols: cb.set(b_cols[0])
+        row=(av,bv,ca,cb,fr)
+        self._match_key_rows.append(row)
+        def _del(r=row):
+            self._match_key_rows.remove(r); r[4].destroy()
+        ttk.Button(fr,text=" ✕ ",style="Flat.TButton",command=_del).pack(side="left",padx=4)
+
+    def _do_match(self):
+        if self._match_df_a is None:
+            messagebox.showwarning("주의","A 파일을 불러오세요."); return
+        if self._match_df_b is None:
+            messagebox.showwarning("주의","B 파일을 불러오세요."); return
+        if not self._match_key_rows:
+            messagebox.showwarning("주의","매칭 키를 1개 이상 추가하세요."); return
+        sel=self.lb_match_cols.curselection()
+        if not sel:
+            messagebox.showwarning("주의","가져올 컬럼을 선택하세요."); return
+        keys_a=[av.get() for av,bv,_,_,_ in self._match_key_rows]
+        keys_b=[bv.get() for av,bv,_,_,_ in self._match_key_rows]
+        bring=[self.lb_match_cols.get(i) for i in sel]
+        try:
+            a=self._match_df_a.copy()
+            need_b=list(dict.fromkeys(keys_b+bring))
+            b=self._match_df_b[[c for c in need_b if c in self._match_df_b.columns]].copy()
+            b=b.drop_duplicates(subset=keys_b,keep="first")
+            b["__hit__"]=True
+            merged=a.merge(b,left_on=keys_a,right_on=keys_b,how="left",suffixes=("","_B"))
+            matched=int(merged["__hit__"].notna().sum())
+            merged=merged.drop(columns=["__hit__"])
+            # 중복 키 컬럼 제거 (B키가 A키와 이름이 다를 때)
+            for ka,kb in zip(keys_a,keys_b):
+                if ka!=kb and kb in merged.columns:
+                    merged=merged.drop(columns=[kb])
+            self._match_result=merged
+            self.match_tree.load(merged,list(merged.columns))
+            unmatched=len(merged)-matched
+            self.lbl_match_r.config(
+                text=f"총 {len(merged):,}행  |  매칭 {matched:,}건  |  미매칭 {unmatched:,}건")
+            self._st(f"매칭 완료: {matched:,}/{len(merged):,}행",C["green"])
+        except Exception as e: messagebox.showerror("매칭 오류",str(e))
+
+    def _save_match(self):
+        if self._match_result is None:
+            messagebox.showinfo("알림","먼저 매칭을 실행하세요."); return
+        self._save_df(self._match_result)
+
+    def _apply_match(self):
+        if self._match_result is None:
+            messagebox.showinfo("알림","먼저 매칭을 실행하세요."); return
+        self._apply(self._match_result,"매칭 결과 적용")
+        self.nb.select(0)
+        self._st("매칭 결과 → 현재 데이터 적용",C["green"])
 
     # ======================== CLOSE ========================
     def _close(self):
