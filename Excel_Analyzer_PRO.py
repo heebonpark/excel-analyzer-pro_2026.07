@@ -75,14 +75,57 @@ def _set_font():
 _set_font()
 
 # ── Palette ──────────────────────────────────────────────────────
-C = dict(
-    bg="#0d1117",surface="#161b22",card="#1c2333",card2="#21262d",
-    border="#30363d",accent="#58a6ff",accent_h="#79c0ff",
-    green="#3fb950",green_h="#56d364",purple="#bc8cff",purple_h="#d2a8ff",
-    orange="#ffa657",orange_h="#ffb77c",red="#f85149",red_h="#ff7b72",
-    cyan="#39d353",yellow="#e3b341",teal="#56d4c8",
-    text="#e6edf3",text2="#c9d1d9",muted="#7d8590",muted2="#484f58",
-)
+THEMES = {
+    "다크": dict(
+        bg="#0d1117",surface="#161b22",card="#1c2333",card2="#21262d",
+        border="#30363d",accent="#58a6ff",accent_h="#79c0ff",
+        green="#3fb950",green_h="#56d364",purple="#bc8cff",purple_h="#d2a8ff",
+        orange="#ffa657",orange_h="#ffb77c",red="#f85149",red_h="#ff7b72",
+        cyan="#39d353",yellow="#e3b341",teal="#56d4c8",
+        text="#e6edf3",text2="#c9d1d9",muted="#7d8590",muted2="#484f58",
+    ),
+    "미드나이트": dict(
+        bg="#000000",surface="#0a0a12",card="#10101c",card2="#16162a",
+        border="#2a2a44",accent="#7c6af7",accent_h="#9d8fff",
+        green="#22c55e",green_h="#4ade80",purple="#a855f7",purple_h="#c084fc",
+        orange="#f97316",orange_h="#fb923c",red="#ef4444",red_h="#f87171",
+        cyan="#06b6d4",yellow="#eab308",teal="#14b8a6",
+        text="#f1f0ff",text2="#d4d0ff",muted="#6b6a9a",muted2="#3d3c6b",
+    ),
+    "오션": dict(
+        bg="#071a2e",surface="#0c2545",card="#0f2d54",card2="#133564",
+        border="#1e4d8c",accent="#38bdf8",accent_h="#7dd3fc",
+        green="#34d399",green_h="#6ee7b7",purple="#818cf8",purple_h="#a5b4fc",
+        orange="#fb923c",orange_h="#fdba74",red="#f87171",red_h="#fca5a5",
+        cyan="#22d3ee",yellow="#fbbf24",teal="#2dd4bf",
+        text="#e0f2fe",text2="#bae6fd",muted="#5c8db8",muted2="#2c5f8a",
+    ),
+    "포레스트": dict(
+        bg="#071510",surface="#0c2018",card="#102818",card2="#163322",
+        border="#1e4d30",accent="#4ade80",accent_h="#86efac",
+        green="#22c55e",green_h="#4ade80",purple="#c084fc",purple_h="#d8b4fe",
+        orange="#fb923c",orange_h="#fdba74",red="#f87171",red_h="#fca5a5",
+        cyan="#34d399",yellow="#facc15",teal="#2dd4bf",
+        text="#dcfce7",text2="#bbf7d0",muted="#4a7c59",muted2="#2d5940",
+    ),
+    "라이트": dict(
+        bg="#f6f8fa",surface="#ffffff",card="#ffffff",card2="#f3f4f6",
+        border="#d0d7de",accent="#0969da",accent_h="#218bff",
+        green="#1a7f37",green_h="#2da44e",purple="#8250df",purple_h="#a371f7",
+        orange="#bc4c00",orange_h="#d1580f",red="#cf222e",red_h="#a40e26",
+        cyan="#0550ae",yellow="#9a6700",teal="#0969da",
+        text="#1f2328",text2="#24292f",muted="#57606a",muted2="#8c959f",
+    ),
+}
+_THEME_FILE = os.path.join(os.path.expanduser("~"),".excel_pro5_theme.json")
+
+def _load_theme_pref():
+    try:
+        with open(_THEME_FILE) as f: return json.load(f).get("theme","다크")
+    except: return "다크"
+
+C = dict(THEMES[_load_theme_pref()])
+
 CHART=["#58a6ff","#3fb950","#bc8cff","#ffa657","#f85149",
        "#39d353","#e3b341","#79c0ff","#56d364","#ff7b72",
        "#ffb77c","#d2a8ff","#a5d6ff","#ffa198","#b3f0ff"]
@@ -394,6 +437,7 @@ class App(tk.Tk):
             os.path.expanduser('~'),'.excel_pro_presets.json')
         self._col_order=[]
         self._load_presets()
+        self._cur_theme=_load_theme_pref()
 
         self._loader=Loader(
             done    =self._load_done,
@@ -475,7 +519,7 @@ class App(tk.Tk):
         self._statbar()
 
     def _hdr(self):
-        h=tk.Frame(self,bg=C["surface"],height=50); h.pack(fill="x"); h.pack_propagate(False)
+        h=tk.Frame(self,bg=C["surface"],height=60); h.pack(fill="x"); h.pack_propagate(False)
         tk.Label(h,text="  Excel 분석기 PRO",bg=C["surface"],fg=C["text"],
                  font=(FN,13,"bold")).pack(side="left")
         tk.Label(h,text="v5.0",bg=C["surface"],fg=C["muted"],
@@ -487,6 +531,36 @@ class App(tk.Tk):
         self.lbl_file=tk.Label(h,text="  파일을 열어주세요",bg=C["surface"],
                                fg=C["muted"],font=(FN,9))
         self.lbl_file.pack(side="left",padx=8)
+
+        # ── 테마 스와치 ──────────────────────────────────────
+        _swatch_accent = {n: t["accent"] for n,t in THEMES.items()}
+        tf=tk.Frame(h,bg=C["surface"]); tf.pack(side="left",padx=(12,0))
+        tk.Label(tf,text="테마",bg=C["surface"],fg=C["muted"],
+                 font=(FN,7)).pack(side="left",padx=(0,4))
+        self._swatches={}
+        _cur=getattr(self,"_cur_theme","다크")
+        for tname,tcol in _swatch_accent.items():
+            sf2=tk.Frame(tf,bg=C["surface"],cursor="hand2")
+            sf2.pack(side="left",padx=2)
+            sz=18
+            cv2=tk.Canvas(sf2,width=sz,height=sz,bg=C["surface"],
+                          highlightthickness=0,cursor="hand2")
+            cv2.pack()
+            active=(_cur==tname)
+            oid=cv2.create_oval(2,2,sz-2,sz-2,fill=tcol,
+                                outline=C["text"] if active else C["surface"],width=2)
+            lid=cv2.create_text(sz//2,sz//2+14,text=tname,
+                                fill=C["text"] if active else C["muted"],
+                                font=(FN,7),anchor="center")
+            cv2.bind("<Button-1>",lambda e,n=tname:self._apply_theme(n))
+            sf2.bind("<Button-1>",lambda e,n=tname:self._apply_theme(n))
+            # tooltip: name label below canvas
+            lname=tk.Label(sf2,text=tname,bg=C["surface"],fg=C["muted2"],
+                           font=(FN,6),cursor="hand2")
+            lname.pack()
+            lname.bind("<Button-1>",lambda e,n=tname:self._apply_theme(n))
+            self._swatches[tname]=(cv2,oid,lname)
+
         _open_lbl = "  파일 열기  (Cmd+O)" if IS_MAC else "  파일 열기  (Ctrl+O)"
         ttk.Button(h,text=_open_lbl,command=self.open_file).pack(side="right",padx=6,pady=9)
         ttk.Button(h,text=" 최근 파일",style="Flat.TButton",
@@ -3371,6 +3445,47 @@ class App(tk.Tk):
         self._apply(self._match_result,"매칭 결과 적용")
         self.nb.select(0)
         self._st("매칭 결과 → 현재 데이터 적용",C["green"])
+
+    # ======================== THEME ========================
+    def _apply_theme(self, name):
+        if name not in THEMES: return
+        old_C = dict(C)           # 변경 전 색상 스냅샷
+        C.update(THEMES[name])    # 전역 C 인플레이스 업데이트
+        self._cur_theme = name
+        self._sty()               # ttk 스타일 재적용
+        self._retheme_widget(self, old_C)   # tk 위젯 색상 갱신
+        # 스와치 테두리 업데이트
+        if hasattr(self, "_swatches"):
+            for n,(cv2,oid,lname) in self._swatches.items():
+                active=(n==name)
+                cv2.configure(bg=C["surface"])
+                cv2.itemconfig(oid,
+                               outline=C["text"] if active else C["surface"],
+                               width=2)
+                lname.configure(bg=C["surface"],
+                                fg=C["text"] if active else C["muted2"])
+        # 환경설정 저장
+        try:
+            with open(_THEME_FILE,"w") as f: json.dump({"theme":name},f)
+        except Exception: pass
+        self._st(f"테마: {name}",C["cyan"])
+
+    def _retheme_widget(self, widget, old_C):
+        """old_C 색상값 → 현재 C 색상값으로 모든 tk 위젯 일괄 갱신"""
+        rev={v.lower():k for k,v in old_C.items()}
+        try:
+            for attr in ("background","foreground","selectbackground",
+                         "activebackground","insertbackground","highlightbackground"):
+                try:
+                    val=widget.cget(attr)
+                    if val and isinstance(val,str) and val.startswith("#"):
+                        key=rev.get(val.lower())
+                        if key and key in C:
+                            widget.configure(**{attr:C[key]})
+                except tk.TclError: pass
+        except Exception: pass
+        for child in widget.winfo_children():
+            self._retheme_widget(child, old_C)
 
     # ======================== CLOSE ========================
     def _close(self):
