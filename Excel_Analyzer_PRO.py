@@ -3088,7 +3088,7 @@ class App(tk.Tk):
         self._match_key_frame.pack(fill="x",padx=12,pady=(2,8))
         self._match_key_rows=[]  # [(a_var,b_var,a_cmb,b_cmb,frame), ...]
 
-        # ── 가져올 컬럼 (chip 선택) ─────────────────────────
+        # ── 가져올 컬럼 (체크박스 선택) ─────────────────────
         cc2=tk.Frame(tab,bg=C["card"]); cc2.pack(fill="x",padx=6,pady=(0,3))
         ch=tk.Frame(cc2,bg=C["card"]); ch.pack(fill="x",padx=12,pady=(8,4))
         tk.Label(ch,text="가져올 컬럼 선택  (B → A, 다중)",bg=C["card"],fg=C["text"],
@@ -3100,10 +3100,11 @@ class App(tk.Tk):
         ttk.Button(ch,text="  미리보기  ",style="Sm.TButton",
                    command=lambda:self._match_col_preview()).pack(side="right")
 
-        # Canvas + scrollbar for chip area
-        _chip_outer=tk.Frame(cc2,bg=C["card2"],bd=1,relief="flat")
+        # Canvas + 세로 스크롤바 + 내부 Frame (wrap layout)
+        _chip_outer=tk.Frame(cc2,bg=C["card2"],highlightthickness=1,
+                             highlightbackground=C["border"])
         _chip_outer.pack(fill="x",padx=12,pady=(0,8))
-        _chip_canvas=tk.Canvas(_chip_outer,bg=C["card2"],highlightthickness=0,height=120)
+        _chip_canvas=tk.Canvas(_chip_outer,bg=C["card2"],highlightthickness=0,height=130)
         _chip_sb=ttk.Scrollbar(_chip_outer,orient="vertical",command=_chip_canvas.yview)
         _chip_inner=tk.Frame(_chip_canvas,bg=C["card2"])
         _chip_win=_chip_canvas.create_window((0,0),window=_chip_inner,anchor="nw")
@@ -3111,20 +3112,29 @@ class App(tk.Tk):
         _chip_sb.pack(side="right",fill="y")
         _chip_canvas.pack(side="left",fill="both",expand=True)
 
-        self._chip_vars={}
-        self._chip_btns={}
+        # 마우스 휠 스크롤 바인딩
+        def _chip_scroll(event):
+            delta=-1 if (event.delta>0 or event.num==4) else 1
+            _chip_canvas.yview_scroll(delta,"units")
+        _chip_canvas.bind("<MouseWheel>",_chip_scroll)
+        _chip_canvas.bind("<Button-4>",_chip_scroll)
+        _chip_canvas.bind("<Button-5>",_chip_scroll)
+
+        self._chip_vars={}   # col -> BooleanVar
+        self._chip_btns={}   # col -> tk.Checkbutton
 
         def _chips_reflow(event=None):
+            """Canvas 너비에 맞게 체크박스를 수평 wrap 배치"""
             cw=_chip_canvas.winfo_width()-8
             if cw<50: return
             x,y,rh=4,4,0
-            for col,btn in self._chip_btns.items():
-                btn.update_idletasks()
-                bw=btn.winfo_reqwidth()+8
-                bh=btn.winfo_reqheight()+4
+            for col,cb in self._chip_btns.items():
+                cb.update_idletasks()
+                bw=cb.winfo_reqwidth()+6
+                bh=cb.winfo_reqheight()+4
                 if x+bw>cw and x>4:
-                    x=4; y+=rh+4; rh=0
-                btn.place(x=x,y=y)
+                    x=4; y+=rh+2; rh=0
+                cb.place(x=x,y=y)
                 x+=bw+4; rh=max(rh,bh)
             total=y+rh+8
             _chip_inner.configure(height=max(total,30))
@@ -3132,40 +3142,35 @@ class App(tk.Tk):
             _chip_canvas.configure(scrollregion=(0,0,cw,total))
 
         _chip_canvas.bind("<Configure>",_chips_reflow)
-        _chip_inner.bind("<Configure>",lambda e:_chip_canvas.configure(
-            scrollregion=_chip_canvas.bbox("all") or (0,0,100,100)))
-
-        def _chip_toggle(col):
-            v=not self._chip_vars[col].get()
-            self._chip_vars[col].set(v)
-            self._chip_btns[col].configure(
-                bg=C["accent"] if v else C["card2"],
-                fg=C["bg"] if v else C["text2"],
-                relief="solid" if v else "flat")
 
         def _chips_set_columns(cols):
+            """B 파일 컬럼 목록으로 체크박스 재생성"""
             for w in _chip_inner.winfo_children(): w.destroy()
             self._chip_vars.clear(); self._chip_btns.clear()
             for col in cols:
                 var=tk.BooleanVar(value=False)
-                btn=tk.Label(_chip_inner,text=f"  {col}  ",
-                             bg=C["card2"],fg=C["text2"],
-                             font=(FN,9),relief="flat",cursor="hand2",
-                             padx=4,pady=3,bd=1)
+                cb=tk.Checkbutton(
+                    _chip_inner, text=col, variable=var,
+                    bg=C["card2"], fg=C["text2"],
+                    selectcolor=C["card"],
+                    activebackground=C["card2"], activeforeground=C["text"],
+                    font=(FN,9), relief="flat", cursor="hand2",
+                    bd=0, highlightthickness=0,
+                    padx=4, pady=2,
+                )
                 self._chip_vars[col]=var
-                self._chip_btns[col]=btn
-                btn.bind("<Button-1>",lambda e,c=col:_chip_toggle(c))
+                self._chip_btns[col]=cb
+                # 휠 이벤트 내부 위젯에도 전파
+                cb.bind("<MouseWheel>",_chip_scroll)
+                cb.bind("<Button-4>",_chip_scroll)
+                cb.bind("<Button-5>",_chip_scroll)
             _chip_canvas.after(60,_chips_reflow)
 
         def _chips_select_all():
-            for c in self._chip_vars:
-                self._chip_vars[c].set(True)
-                self._chip_btns[c].configure(bg=C["accent"],fg=C["bg"],relief="solid")
+            for v in self._chip_vars.values(): v.set(True)
 
         def _chips_clear_all():
-            for c in self._chip_vars:
-                self._chip_vars[c].set(False)
-                self._chip_btns[c].configure(bg=C["card2"],fg=C["text2"],relief="flat")
+            for v in self._chip_vars.values(): v.set(False)
 
         self._chips_set_columns=_chips_set_columns
         self._chips_select_all=_chips_select_all
