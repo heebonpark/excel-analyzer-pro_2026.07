@@ -3135,7 +3135,7 @@ class App(tk.Tk):
         self._match_result=None; self._match_b_xl=None
 
     def _match_pick_open(self, which):
-        """열려있는 Excel 파일 목록 팝업 → A 또는 B로 로드"""
+        """열려있는 Excel 파일 목록 팝업 → 시트/헤더행 선택 → 컬럼 미리보기 → A/B 로드"""
         books = self._get_open_books()
         if not books:
             messagebox.showwarning("열린 파일 없음",
@@ -3144,74 +3144,134 @@ class App(tk.Tk):
             return
 
         pop = tk.Toplevel(self)
-        pop.title("열린 Excel 파일 선택")
+        lbl_title = "A 파일 (기준)" if which=="a" else "B 파일 (참조)"
+        pop.title(f"열린 파일 선택  —  {lbl_title}")
         pop.configure(bg=C["surface"])
-        pop.geometry("560x360")
-        pop.resizable(False, False)
+        pop.geometry("620x500"); pop.resizable(True, True)
         pop.transient(self); pop.grab_set(); pop.lift(); pop.focus_force()
 
-        lbl_title = "A 파일 (기준)" if which == "a" else "B 파일 (참조)"
         tk.Label(pop, text=f"{lbl_title}  —  열려있는 파일 선택",
                  bg=C["surface"], fg=C["text"],
                  font=(FN,11,"bold")).pack(pady=(14,6), padx=16, anchor="w")
 
-        # 선택 상태를 변수로 직접 추적 (curselection 의존 제거)
         cur = {"bk": books[0] if books else None}
 
-        # ── 파일 목록 (라디오버튼 스타일 프레임) ──────────────
+        # ── 파일 목록 ─────────────────────────────────────────
         lf = tk.Frame(pop, bg=C["card"]); lf.pack(fill="x", padx=16)
         btn_vars = []
-        lbl_sel_file = tk.Label(pop, text="", bg=C["surface"], fg=C["cyan"],
-                                font=(FN,9)); lbl_sel_file.pack(anchor="w", padx=16)
 
-        # 시트 콤보 먼저 생성 (파일 선택 버튼에서 참조)
-        sf = tk.Frame(pop, bg=C["surface"]); sf.pack(fill="x", padx=16, pady=(8,4))
-        tk.Label(sf, text="시트:", bg=C["surface"], fg=C["muted"],
-                 font=(FN,9)).pack(side="left")
-        cmb_sh2 = ttk.Combobox(sf, state="readonly", width=24)
-        cmb_sh2.pack(side="left", padx=6)
+        # ── 시트 + 헤더 행 ────────────────────────────────────
+        sf = tk.Frame(pop, bg=C["surface"]); sf.pack(fill="x", padx=16, pady=(10,0))
+        tk.Label(sf,text="시트:",bg=C["surface"],fg=C["muted"],font=(FN,9)).pack(side="left")
+        cmb_sh2 = ttk.Combobox(sf, state="readonly", width=20)
+        cmb_sh2.pack(side="left", padx=(4,16))
+        tk.Label(sf,text="헤더 행:",bg=C["surface"],fg=C["muted"],font=(FN,9)).pack(side="left")
+        var_hdr = tk.IntVar(value=0)
+        spn = tk.Spinbox(sf, from_=0, to=20, width=4, textvariable=var_hdr,
+                         bg=C["card2"], fg=C["text"], insertbackground=C["text"],
+                         buttonbackground=C["border"], relief="flat", font=(FN,9),
+                         command=lambda: pop.after(50, _preview))
+        spn.pack(side="left", padx=(4,8))
+        tk.Label(sf,text="빠른선택:",bg=C["surface"],fg=C["muted2"],font=(FN,8)).pack(side="left")
+        for h in range(6):
+            ttk.Button(sf, text=f"{h}행", style="Sm.TButton",
+                       command=lambda hh=h: (var_hdr.set(hh), _preview())
+                       ).pack(side="left", padx=1)
+
+        # ── 컬럼 미리보기 ─────────────────────────────────────
+        pf = tk.Frame(pop, bg=C["card"]); pf.pack(fill="x", padx=16, pady=(8,0))
+        tk.Label(pf,text="컬럼 미리보기",bg=C["card"],fg=C["muted"],
+                 font=(FN,8,"bold")).pack(anchor="w",padx=10,pady=(6,2))
+        lbl_cols = tk.Label(pf, text="파일을 선택하면 컬럼이 표시됩니다",
+                            bg=C["card"], fg=C["muted2"], font=(FN,9),
+                            wraplength=560, justify="left", anchor="w")
+        lbl_cols.pack(fill="x", padx=10, pady=(0,6))
+
+        def _fp_fix(fp):
+            """Mac HFS+ 경로 → POSIX 변환"""
+            if fp and ':' in fp and not fp.startswith('/'):
+                try:
+                    r2=subprocess.run(['osascript','-e',f'POSIX path of "{fp}"'],
+                                      capture_output=True,text=True,timeout=3)
+                    if r2.returncode==0: return r2.stdout.strip()
+                except Exception: pass
+            return fp
+
+        def _preview():
+            bk = cur["bk"]
+            if not bk: return
+            sh = cmb_sh2.get() or (bk["sheets"][0] if bk["sheets"] else "Sheet1")
+            hdr = var_hdr.get(); cols = None
+
+            # xlwings로 헤더 행 값만 읽기
+            if bk.get("wb"):
+                try:
+                    ws = bk["wb"].sheets[sh]
+                    row_vals = ws.range((hdr+1,1),(hdr+1,100)).value or []
+                    cols=[str(v).strip() for v in row_vals
+                          if v is not None and str(v).strip() not in ("","nan","None")]
+                except Exception: pass
+
+            # pandas로 컬럼만 peek
+            if not cols:
+                fp = _fp_fix(bk.get("path","").strip())
+                if fp and os.path.exists(fp):
+                    try:
+                        ext=os.path.splitext(fp)[1].lower()
+                        if ext in(".xlsx",".xlsm"):
+                            peek=pd.ExcelFile(fp,engine="openpyxl").parse(sh,header=hdr,nrows=0)
+                        elif ext==".xls":
+                            peek=pd.ExcelFile(fp,engine="xlrd").parse(sh,header=hdr,nrows=0)
+                        else:
+                            peek=pd.read_csv(fp,header=hdr,nrows=0)
+                        cols=[str(c) for c in peek.columns]
+                    except Exception: pass
+
+            if cols:
+                preview=" | ".join(cols[:12])
+                if len(cols)>12: preview+=f"  …+{len(cols)-12}개"
+                lbl_cols.config(text=f"({len(cols)}개)  {preview}", fg=C["text2"])
+            else:
+                lbl_cols.config(text="컬럼을 읽을 수 없습니다  —  헤더 행 번호를 확인하세요",
+                                fg=C["orange"])
+
+        cmb_sh2.bind("<<ComboboxSelected>>", lambda e: _preview())
+        spn.bind("<FocusOut>", lambda e: _preview())
 
         def _pick(bk):
             cur["bk"] = bk
-            lbl_sel_file.config(text=f"  {bk['name']}  |  {bk['path']}")
             cmb_sh2["values"] = bk["sheets"]
             cmb_sh2.set(bk["sheets"][0] if bk["sheets"] else "")
-            # 버튼 강조
             for v, btn in btn_vars:
-                btn.config(relief="sunken" if v is bk else "flat",
-                           fg=C["text"] if v is bk else C["muted"])
+                btn.config(bg=C["accent"] if v is bk else C["card2"],
+                           fg=C["bg"] if v is bk else C["muted"])
+            pop.after(100, _preview)
 
         for bk in books:
-            row = tk.Frame(lf, bg=C["card2"], cursor="hand2")
-            row.pack(fill="x", pady=1, padx=2)
-            lbl = tk.Label(row,
+            rf = tk.Frame(lf, bg=C["card2"], cursor="hand2")
+            rf.pack(fill="x", pady=1, padx=2)
+            lbl = tk.Label(rf,
                            text=f"  {bk['name']}    [{bk['source']}]    {bk['path']}",
                            bg=C["card2"], fg=C["muted"], font=(FN,9),
                            anchor="w", padx=4, pady=6)
             lbl.pack(fill="x")
             lbl.bind("<Button-1>", lambda e, b=bk: _pick(b))
-            row.bind("<Button-1>",  lambda e, b=bk: _pick(b))
+            rf.bind("<Button-1>",  lambda e, b=bk: _pick(b))
             btn_vars.append((bk, lbl))
 
-        # 첫 번째 파일 기본 선택
-        if books:
-            _pick(books[0])
+        if books: _pick(books[0])
 
-        def _xw_to_df(data):
-            """xlwings used_range.value → DataFrame (2D/1D/스칼라 모두 처리)"""
-            if data is None:
-                return pd.DataFrame()
+        def _xw_to_df(data, hdr=0):
+            if data is None: return pd.DataFrame()
             if not isinstance(data, list):
                 return pd.DataFrame([[data]], columns=["값"])
-            if not data:
-                return pd.DataFrame()
+            if not data: return pd.DataFrame()
             if isinstance(data[0], list):
-                # 2D: 첫 행 = 헤더
+                if hdr >= len(data): hdr=0
                 hdrs=[str(v) if v is not None else f"_col{i}"
-                      for i,v in enumerate(data[0])]
-                return pd.DataFrame(data[1:], columns=hdrs)
+                      for i,v in enumerate(data[hdr])]
+                return pd.DataFrame(data[hdr+1:], columns=hdrs)
             else:
-                # 1D: 단일 행 → 헤더만 존재
                 hdrs=[str(v) if v is not None else f"_col{i}"
                       for i,v in enumerate(data)]
                 return pd.DataFrame([], columns=hdrs)
@@ -3221,73 +3281,75 @@ class App(tk.Tk):
             if bk is None:
                 messagebox.showwarning("주의","파일을 선택하세요.",parent=pop); return
             sh = cmb_sh2.get() or (bk["sheets"][0] if bk["sheets"] else "Sheet1")
-            errs=[]; df=None
+            hdr = var_hdr.get(); errs=[]; df=None
 
-            # 1순위: xlwings 직접 읽기 (파일 열려있음 → 가장 신뢰성 높음)
             if bk.get("wb"):
                 try:
                     ws=bk["wb"].sheets[sh]
-                    df=_xw_to_df(ws.used_range.value)
-                except Exception as e:
-                    errs.append(f"xlwings: {e}")
+                    df=_xw_to_df(ws.used_range.value, hdr)
+                except Exception as e: errs.append(f"xlwings: {e}")
 
-            # 2순위: pandas 파일 경로 읽기
-            if df is None or df.empty:
-                fp=bk.get("path","").strip()
-                # Mac HFS+ 경로 → POSIX 변환 시도
-                if fp and ':' in fp and not fp.startswith('/'):
-                    try:
-                        r2=subprocess.run(['osascript','-e',
-                                           f'POSIX path of "{fp}"'],
-                                          capture_output=True,text=True,timeout=3)
-                        if r2.returncode==0: fp=r2.stdout.strip()
-                    except Exception: pass
+            if df is None or (df.empty and len(df.columns)==0):
+                fp=_fp_fix(bk.get("path","").strip())
                 if fp and os.path.exists(fp):
                     try:
                         ext=os.path.splitext(fp)[1].lower()
                         if ext in(".xlsx",".xlsm"):
-                            df=pd.ExcelFile(fp,engine="openpyxl").parse(sh)
+                            df=pd.ExcelFile(fp,engine="openpyxl").parse(sh,header=hdr)
                         elif ext==".xls":
-                            df=pd.ExcelFile(fp,engine="xlrd").parse(sh)
+                            df=pd.ExcelFile(fp,engine="xlrd").parse(sh,header=hdr)
                         else:
-                            df=Loader._csv(fp,self.cmb_enc.get(),0)
-                    except Exception as e:
-                        errs.append(f"파일읽기({fp}): {e}")
-                else:
-                    errs.append(f"경로없음: '{fp}'")
+                            df=Loader._csv(fp,self.cmb_enc.get(),hdr)
+                    except Exception as e: errs.append(f"파일읽기: {e}")
+                else: errs.append(f"경로없음: '{fp}'")
 
-            if df is None or (hasattr(df,'empty') and df.empty and len(df.columns)==0):
+            if df is None or (df.empty and len(df.columns)==0):
                 msg="파일 읽기 실패\n\n"+"\n".join(errs)
                 msg+="\n\n[찾아보기] 버튼으로 직접 파일을 선택해 주세요."
                 messagebox.showerror("오류",msg,parent=pop); return
-
             try:
                 df=self._clean(df)
+                info=f"{bk['name']} / {sh}  (헤더:{hdr}행 · {len(df):,}행)"
                 if which=="a":
                     self._match_df_a=df
-                    self.lbl_ma.config(text=f"{bk['name']} / {sh}  ({len(df):,}행)")
+                    self.lbl_ma.config(text=info)
                     self._match_refresh_combos("a")
                 else:
                     self._match_df_b=df
-                    self.lbl_mb.config(text=f"{bk['name']} / {sh}  ({len(df):,}행)")
-                    self.cmb_bsh["values"]=bk["sheets"]
-                    self.cmb_bsh.set(sh)
+                    self.lbl_mb.config(text=info)
+                    self.cmb_bsh["values"]=bk["sheets"]; self.cmb_bsh.set(sh)
                     self._match_refresh_combos("b")
                     self.lb_match_cols.delete(0,"end")
                     for c in df.columns: self.lb_match_cols.insert("end",c)
+                self._match_auto_key()
                 pop.destroy()
-                self._st(f"매칭 {'A' if which=='a' else 'B'} 파일 로드: {bk['name']} / {sh}",C["teal"])
+                self._st(f"매칭 {'A' if which=='a' else 'B'}: {bk['name']} / {sh}",C["teal"])
             except Exception as e:
                 messagebox.showerror("오류",str(e),parent=pop)
 
-        bf = tk.Frame(pop, bg=C["surface"]); bf.pack(pady=10)
-        ttk.Button(bf, text="  선택  ", command=_load).pack(side="left", padx=6, ipadx=8, ipady=4)
-        ttk.Button(bf, text="취소", style="Flat.TButton",
-                   command=pop.destroy).pack(side="left", padx=6)
-        ttk.Button(bf, text=" 새로고침", style="Flat.TButton",
-                   command=lambda: (pop.destroy(),
-                                    self.after(80, lambda: self._match_pick_open(which)))
-                   ).pack(side="left", padx=6)
+        bf = tk.Frame(pop, bg=C["surface"]); bf.pack(pady=12)
+        ttk.Button(bf,text="  선택  ",command=_load).pack(side="left",padx=6,ipadx=8,ipady=4)
+        ttk.Button(bf,text="취소",style="Flat.TButton",command=pop.destroy).pack(side="left",padx=6)
+        ttk.Button(bf,text=" 새로고침",style="Flat.TButton",
+                   command=lambda:(pop.destroy(),
+                                   self.after(80,lambda:self._match_pick_open(which)))
+                   ).pack(side="left",padx=6)
+
+    def _match_auto_key(self):
+        """A·B 모두 로드됐을 때 공통 컬럼을 키로 자동 추가 (계약번호 우선)"""
+        if self._match_df_a is None or self._match_df_b is None: return
+        common = set(self._match_df_a.columns) & set(self._match_df_b.columns)
+        if not common: return
+        priority=["계약번호","계약ID","고객번호","사원번호","주민번호",
+                  "코드","CODE","ID","id","No","NO"]
+        key=next((k for k in priority if k in common), sorted(common)[0])
+        existing=[(av.get(),bv.get()) for av,bv,_,_,_ in self._match_key_rows]
+        if any(av==key and bv==key for av,bv in existing): return
+        if not self._match_key_rows:
+            self._match_add_key()
+            self._match_key_rows[-1][0].set(key)
+            self._match_key_rows[-1][1].set(key)
+            self._st(f"매칭 키 자동 설정: {key}",C["cyan"])
 
     def _match_use_current(self):
         if self.df_raw is None:
@@ -3296,6 +3358,7 @@ class App(tk.Tk):
         name=os.path.basename(self.raw_path) if self.raw_path else "현재 파일"
         self.lbl_ma.config(text=f"{name}  ({len(self._match_df_a):,}행)")
         self._match_refresh_combos("a")
+        self._match_auto_key()
 
     def _match_browse(self,which):
         p=filedialog.askopenfilename(
@@ -3339,6 +3402,7 @@ class App(tk.Tk):
                 self._match_refresh_combos("b")
                 self.lb_match_cols.delete(0,"end")
                 for c in df.columns: self.lb_match_cols.insert("end",c)
+            self._match_auto_key()
         except Exception as e: messagebox.showerror("오류",str(e))
 
     def _match_pick_sheet(self,sheets,title=""):
