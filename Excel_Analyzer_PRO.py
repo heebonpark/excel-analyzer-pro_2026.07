@@ -3081,50 +3081,62 @@ class App(tk.Tk):
                  bg=C["surface"], fg=C["text"],
                  font=(FN,11,"bold")).pack(pady=(14,6), padx=16, anchor="w")
 
-        # 파일 목록
-        lf = tk.Frame(pop, bg=C["card"]); lf.pack(fill="x", padx=16)
-        lb = tk.Listbox(lf, bg=C["card2"], fg=C["text2"],
-                        selectbackground=C["accent"],
-                        font=(FN,10), height=min(8, len(books)),
-                        activestyle="none", exportselection=False)
-        for bk in books:
-            lb.insert("end", f"  {bk['name']}  [{bk['source']}]  {bk['path']}")
-        lb.pack(fill="x", expand=True)
-        if books: lb.select_set(0)
+        # 선택 상태를 변수로 직접 추적 (curselection 의존 제거)
+        cur = {"bk": books[0] if books else None}
 
-        # 시트 선택
-        sf = tk.Frame(pop, bg=C["surface"]); sf.pack(fill="x", padx=16, pady=(10,4))
+        # ── 파일 목록 (라디오버튼 스타일 프레임) ──────────────
+        lf = tk.Frame(pop, bg=C["card"]); lf.pack(fill="x", padx=16)
+        btn_vars = []
+        lbl_sel_file = tk.Label(pop, text="", bg=C["surface"], fg=C["cyan"],
+                                font=(FN,9)); lbl_sel_file.pack(anchor="w", padx=16)
+
+        # 시트 콤보 먼저 생성 (파일 선택 버튼에서 참조)
+        sf = tk.Frame(pop, bg=C["surface"]); sf.pack(fill="x", padx=16, pady=(8,4))
         tk.Label(sf, text="시트:", bg=C["surface"], fg=C["muted"],
                  font=(FN,9)).pack(side="left")
-        cmb_sh2 = ttk.Combobox(sf, state="readonly", width=20)
+        cmb_sh2 = ttk.Combobox(sf, state="readonly", width=24)
         cmb_sh2.pack(side="left", padx=6)
 
-        def _on_sel(e=None):
-            idx = lb.curselection()
-            if not idx: return
-            bk = books[idx[0]]
+        def _pick(bk):
+            cur["bk"] = bk
+            lbl_sel_file.config(text=f"  {bk['name']}  |  {bk['path']}")
             cmb_sh2["values"] = bk["sheets"]
             cmb_sh2.set(bk["sheets"][0] if bk["sheets"] else "")
-        lb.bind("<<ListboxSelect>>", _on_sel)
-        _on_sel()
+            # 버튼 강조
+            for v, btn in btn_vars:
+                btn.config(relief="sunken" if v is bk else "flat",
+                           fg=C["text"] if v is bk else C["muted"])
+
+        for bk in books:
+            row = tk.Frame(lf, bg=C["card2"], cursor="hand2")
+            row.pack(fill="x", pady=1, padx=2)
+            lbl = tk.Label(row,
+                           text=f"  {bk['name']}    [{bk['source']}]    {bk['path']}",
+                           bg=C["card2"], fg=C["muted"], font=(FN,9),
+                           anchor="w", padx=4, pady=6)
+            lbl.pack(fill="x")
+            lbl.bind("<Button-1>", lambda e, b=bk: _pick(b))
+            row.bind("<Button-1>",  lambda e, b=bk: _pick(b))
+            btn_vars.append((bk, lbl))
+
+        # 첫 번째 파일 기본 선택
+        if books:
+            _pick(books[0])
 
         def _load():
-            idx = lb.curselection()
-            if not idx:
+            bk = cur["bk"]
+            if bk is None:
                 messagebox.showwarning("주의","파일을 선택하세요.",parent=pop); return
-            bk = books[idx[0]]
             sh = cmb_sh2.get() or (bk["sheets"][0] if bk["sheets"] else "Sheet1")
             try:
                 fp = bk.get("path","")
                 df = None
-                # 경로로 읽기 시도
                 if fp and os.path.exists(fp):
                     ext = os.path.splitext(fp)[1].lower()
                     if ext in (".xlsx",".xlsm"):
                         df = pd.ExcelFile(fp, engine="openpyxl").parse(sh)
                     elif ext == ".xls":
                         df = pd.ExcelFile(fp, engine="xlrd").parse(sh)
-                # xlwings 로 읽기 (파일 저장 안 된 경우)
                 if df is None and bk.get("wb"):
                     ws = bk["wb"].sheets[sh]
                     data = ws.used_range.value
@@ -3133,7 +3145,7 @@ class App(tk.Tk):
                     elif data:
                         df = pd.DataFrame(data)
                 if df is None:
-                    raise ValueError("파일을 읽을 수 없습니다.")
+                    raise ValueError("파일을 읽을 수 없습니다.\n경로: " + fp)
                 df = self._clean(df)
                 if which == "a":
                     self._match_df_a = df
