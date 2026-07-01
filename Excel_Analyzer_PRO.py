@@ -3088,24 +3088,89 @@ class App(tk.Tk):
         self._match_key_frame.pack(fill="x",padx=12,pady=(2,8))
         self._match_key_rows=[]  # [(a_var,b_var,a_cmb,b_cmb,frame), ...]
 
-        # ── 가져올 컬럼 ────────────────────────────────────
+        # ── 가져올 컬럼 (chip 선택) ─────────────────────────
         cc2=tk.Frame(tab,bg=C["card"]); cc2.pack(fill="x",padx=6,pady=(0,3))
         ch=tk.Frame(cc2,bg=C["card"]); ch.pack(fill="x",padx=12,pady=(8,4))
         tk.Label(ch,text="가져올 컬럼 선택  (B → A, 다중)",bg=C["card"],fg=C["text"],
                  font=(FN,11,"bold")).pack(side="left")
         ttk.Button(ch,text="전체 선택",style="Flat.TButton",
-                   command=lambda:self.lb_match_cols.select_set(0,"end")).pack(side="left",padx=8)
+                   command=lambda:self._chips_select_all()).pack(side="left",padx=8)
         ttk.Button(ch,text="전체 해제",style="Flat.TButton",
-                   command=lambda:self.lb_match_cols.selection_clear(0,"end")).pack(side="left")
-        lbf2=tk.Frame(cc2,bg=C["card"]); lbf2.pack(fill="x",padx=12,pady=(0,8))
-        sb4=ttk.Scrollbar(lbf2,orient="vertical")
-        self.lb_match_cols=tk.Listbox(lbf2,selectmode="multiple",
-                                      bg=C["card2"],fg=C["text2"],
-                                      selectbackground=C["accent"],height=4,
-                                      font=(FN,9),yscrollcommand=sb4.set)
-        sb4.config(command=self.lb_match_cols.yview)
-        sb4.pack(side="right",fill="y")
-        self.lb_match_cols.pack(fill="x",expand=True)
+                   command=lambda:self._chips_clear_all()).pack(side="left")
+        ttk.Button(ch,text="  미리보기  ",style="Sm.TButton",
+                   command=lambda:self._match_col_preview()).pack(side="right")
+
+        # Canvas + scrollbar for chip area
+        _chip_outer=tk.Frame(cc2,bg=C["card2"],bd=1,relief="flat")
+        _chip_outer.pack(fill="x",padx=12,pady=(0,8))
+        _chip_canvas=tk.Canvas(_chip_outer,bg=C["card2"],highlightthickness=0,height=120)
+        _chip_sb=ttk.Scrollbar(_chip_outer,orient="vertical",command=_chip_canvas.yview)
+        _chip_inner=tk.Frame(_chip_canvas,bg=C["card2"])
+        _chip_win=_chip_canvas.create_window((0,0),window=_chip_inner,anchor="nw")
+        _chip_canvas.configure(yscrollcommand=_chip_sb.set)
+        _chip_sb.pack(side="right",fill="y")
+        _chip_canvas.pack(side="left",fill="both",expand=True)
+
+        self._chip_vars={}
+        self._chip_btns={}
+
+        def _chips_reflow(event=None):
+            cw=_chip_canvas.winfo_width()-8
+            if cw<50: return
+            x,y,rh=4,4,0
+            for col,btn in self._chip_btns.items():
+                btn.update_idletasks()
+                bw=btn.winfo_reqwidth()+8
+                bh=btn.winfo_reqheight()+4
+                if x+bw>cw and x>4:
+                    x=4; y+=rh+4; rh=0
+                btn.place(x=x,y=y)
+                x+=bw+4; rh=max(rh,bh)
+            total=y+rh+8
+            _chip_inner.configure(height=max(total,30))
+            _chip_canvas.itemconfig(_chip_win,width=_chip_canvas.winfo_width()-4)
+            _chip_canvas.configure(scrollregion=(0,0,cw,total))
+
+        _chip_canvas.bind("<Configure>",_chips_reflow)
+        _chip_inner.bind("<Configure>",lambda e:_chip_canvas.configure(
+            scrollregion=_chip_canvas.bbox("all") or (0,0,100,100)))
+
+        def _chip_toggle(col):
+            v=not self._chip_vars[col].get()
+            self._chip_vars[col].set(v)
+            self._chip_btns[col].configure(
+                bg=C["accent"] if v else C["card2"],
+                fg=C["bg"] if v else C["text2"],
+                relief="solid" if v else "flat")
+
+        def _chips_set_columns(cols):
+            for w in _chip_inner.winfo_children(): w.destroy()
+            self._chip_vars.clear(); self._chip_btns.clear()
+            for col in cols:
+                var=tk.BooleanVar(value=False)
+                btn=tk.Label(_chip_inner,text=f"  {col}  ",
+                             bg=C["card2"],fg=C["text2"],
+                             font=(FN,9),relief="flat",cursor="hand2",
+                             padx=4,pady=3,bd=1)
+                self._chip_vars[col]=var
+                self._chip_btns[col]=btn
+                btn.bind("<Button-1>",lambda e,c=col:_chip_toggle(c))
+            _chip_canvas.after(60,_chips_reflow)
+
+        def _chips_select_all():
+            for c in self._chip_vars:
+                self._chip_vars[c].set(True)
+                self._chip_btns[c].configure(bg=C["accent"],fg=C["bg"],relief="solid")
+
+        def _chips_clear_all():
+            for c in self._chip_vars:
+                self._chip_vars[c].set(False)
+                self._chip_btns[c].configure(bg=C["card2"],fg=C["text2"],relief="flat")
+
+        self._chips_set_columns=_chips_set_columns
+        self._chips_select_all=_chips_select_all
+        self._chips_clear_all=_chips_clear_all
+        self._chips_get_selected=lambda:[c for c,v in self._chip_vars.items() if v.get()]
 
         # ── 실행 ───────────────────────────────────────────
         xf=tk.Frame(tab,bg=C["card"]); xf.pack(fill="x",padx=6,pady=(0,3))
@@ -3319,8 +3384,7 @@ class App(tk.Tk):
                     self.lbl_mb.config(text=info)
                     self.cmb_bsh["values"]=bk["sheets"]; self.cmb_bsh.set(sh)
                     self._match_refresh_combos("b")
-                    self.lb_match_cols.delete(0,"end")
-                    for c in df.columns: self.lb_match_cols.insert("end",c)
+                    self._chips_set_columns(list(df.columns))
                 self._match_auto_key()
                 pop.destroy()
                 self._st(f"매칭 {'A' if which=='a' else 'B'}: {bk['name']} / {sh}",C["teal"])
@@ -3400,8 +3464,7 @@ class App(tk.Tk):
                 else:  self.cmb_bsh["values"]=["Sheet1"]; self.cmb_bsh.set("Sheet1")
                 self.lbl_mb.config(text=f"{name} / {chosen_sh}  ({len(df):,}행)")
                 self._match_refresh_combos("b")
-                self.lb_match_cols.delete(0,"end")
-                for c in df.columns: self.lb_match_cols.insert("end",c)
+                self._chips_set_columns(list(df.columns))
             self._match_auto_key()
         except Exception as e: messagebox.showerror("오류",str(e))
 
@@ -3431,9 +3494,47 @@ class App(tk.Tk):
             self._match_df_b=self._clean(df)
             self.lbl_mb.config(text=f"{self.cmb_bsh.get()}  ({len(df):,}행)")
             self._match_refresh_combos("b")
-            self.lb_match_cols.delete(0,"end")
-            for c in df.columns: self.lb_match_cols.insert("end",c)
+            self._chips_set_columns(list(df.columns))
         except Exception as e: messagebox.showerror("오류",str(e))
+
+    def _match_col_preview(self):
+        """선택된 컬럼의 B 데이터 미리보기 팝업"""
+        if self._match_df_b is None:
+            messagebox.showinfo("안내","B 파일을 먼저 불러오세요."); return
+        sel=self._chips_get_selected()
+        show_cols=sel if sel else list(self._match_df_b.columns)
+        valid=[c for c in show_cols if c in self._match_df_b.columns]
+        if not valid:
+            messagebox.showinfo("안내","유효한 컬럼이 없습니다."); return
+
+        pop=tk.Toplevel(self)
+        pop.title("컬럼 데이터 미리보기")
+        pop.configure(bg=C["surface"])
+        pop.geometry("860x420"); pop.resizable(True,True)
+        pop.transient(self); pop.grab_set(); pop.lift(); pop.focus_force()
+
+        hf=tk.Frame(pop,bg=C["surface"]); hf.pack(fill="x",padx=16,pady=(14,6))
+        tk.Label(hf,text=f"컬럼 미리보기  ({len(valid)}개 선택 · 상위 30행)",
+                 bg=C["surface"],fg=C["text"],font=(FN,11,"bold")).pack(side="left")
+        ttk.Button(hf,text="닫기",style="Flat.TButton",
+                   command=pop.destroy).pack(side="right")
+
+        mw=tk.Frame(pop,bg=C["card"]); mw.pack(fill="both",expand=True,padx=12,pady=(0,12))
+        tree=VTree(mw,show="headings")
+        vsb=ttk.Scrollbar(mw,orient="vertical",command=tree.yview)
+        hsb=ttk.Scrollbar(mw,orient="horizontal",command=tree.xview)
+        tree.configure(yscrollcommand=vsb.set,xscrollcommand=hsb.set)
+        hsb.pack(side="bottom",fill="x"); vsb.pack(side="right",fill="y")
+        tree.pack(fill="both",expand=True)
+
+        sub=self._match_df_b[valid].head(30)
+        tree["columns"]=list(sub.columns)
+        for col in sub.columns:
+            w=max(80,min(200,len(str(col))*10))
+            tree.heading(col,text=col)
+            tree.column(col,width=w,minwidth=60)
+        for _,row in sub.iterrows():
+            tree.insert("","end",values=[str(v) if v is not None else "" for v in row])
 
     def _match_refresh_combos(self,which):
         a_cols=list(self._match_df_a.columns) if self._match_df_a is not None else []
@@ -3471,12 +3572,11 @@ class App(tk.Tk):
             messagebox.showwarning("주의","B 파일을 불러오세요."); return
         if not self._match_key_rows:
             messagebox.showwarning("주의","매칭 키를 1개 이상 추가하세요."); return
-        sel=self.lb_match_cols.curselection()
-        if not sel:
+        bring=self._chips_get_selected()
+        if not bring:
             messagebox.showwarning("주의","가져올 컬럼을 선택하세요."); return
         keys_a=[av.get() for av,bv,_,_,_ in self._match_key_rows]
         keys_b=[bv.get() for av,bv,_,_,_ in self._match_key_rows]
-        bring=[self.lb_match_cols.get(i) for i in sel]
         try:
             a=self._match_df_a.copy()
             need_b=list(dict.fromkeys(keys_b+bring))
