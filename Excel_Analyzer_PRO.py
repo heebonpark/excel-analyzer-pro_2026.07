@@ -117,7 +117,8 @@ THEMES = {
         text="#1f2328",text2="#24292f",muted="#57606a",muted2="#8c959f",
     ),
 }
-_THEME_FILE = os.path.join(os.path.expanduser("~"),".excel_pro5_theme.json")
+_THEME_FILE  = os.path.join(os.path.expanduser("~"),".excel_pro5_theme.json")
+_PRESET_FILE = os.path.join(os.path.expanduser("~"),".excel_pro5_col_presets.json")
 
 def _load_theme_pref():
     try:
@@ -3100,6 +3101,24 @@ class App(tk.Tk):
         ttk.Button(ch,text="  미리보기  ",style="Sm.TButton",
                    command=lambda:self._match_col_preview()).pack(side="right")
 
+        # ── 프리셋 행 ────────────────────────────────────────
+        pf=tk.Frame(cc2,bg=C["card"]); pf.pack(fill="x",padx=12,pady=(0,4))
+        tk.Label(pf,text="프리셋:",bg=C["card"],fg=C["muted"],font=(FN,9)).pack(side="left")
+        self._preset_name_var=tk.StringVar()
+        tk.Entry(pf,textvariable=self._preset_name_var,width=14,
+                 bg=C["card2"],fg=C["text"],insertbackground=C["text"],
+                 relief="flat",font=(FN,9)).pack(side="left",padx=(4,2))
+        ttk.Button(pf,text="저장",style="Sm.TButton",
+                   command=lambda:self._match_preset_save()).pack(side="left",padx=2)
+        tk.Label(pf,text="  불러오기:",bg=C["card"],fg=C["muted"],font=(FN,9)).pack(side="left",padx=(8,2))
+        self._preset_cmb=ttk.Combobox(pf,state="readonly",width=16,font=(FN,9))
+        self._preset_cmb.pack(side="left",padx=(0,2))
+        ttk.Button(pf,text="적용",style="Sm.TButton",
+                   command=lambda:self._match_preset_load()).pack(side="left",padx=2)
+        ttk.Button(pf,text="삭제",style="Flat.TButton",
+                   command=lambda:self._match_preset_delete()).pack(side="left",padx=2)
+        self._match_preset_refresh()
+
         # Canvas + 세로 스크롤바 + 내부 Frame (wrap layout)
         _chip_outer=tk.Frame(cc2,bg=C["card2"],highlightthickness=1,
                              highlightbackground=C["border"])
@@ -3502,6 +3521,72 @@ class App(tk.Tk):
             self._chips_set_columns(list(df.columns))
         except Exception as e: messagebox.showerror("오류",str(e))
 
+    # ── 컬럼 프리셋 ────────────────────────────────────────────
+    def _match_preset_refresh(self):
+        """프리셋 Combobox 목록 갱신"""
+        try:
+            import json as _j
+            with open(_PRESET_FILE) as f: presets=_j.load(f)
+        except: presets={}
+        self._preset_cmb["values"]=list(presets.keys())
+        if presets: self._preset_cmb.set(list(presets.keys())[0])
+
+    def _match_preset_save(self):
+        """현재 체크박스 선택을 프리셋으로 저장"""
+        name=self._preset_name_var.get().strip()
+        if not name:
+            messagebox.showwarning("주의","프리셋 이름을 입력하세요."); return
+        sel=self._chips_get_selected()
+        if not sel:
+            messagebox.showwarning("주의","저장할 컬럼을 선택하세요."); return
+        try:
+            import json as _j
+            try:
+                with open(_PRESET_FILE) as f: presets=_j.load(f)
+            except: presets={}
+            presets[name]=sel
+            with open(_PRESET_FILE,"w") as f: _j.dump(presets,f,ensure_ascii=False)
+            self._match_preset_refresh()
+            self._preset_cmb.set(name)
+            self._st(f"프리셋 저장: {name} ({len(sel)}개)",C["cyan"])
+        except Exception as e: messagebox.showerror("오류",str(e))
+
+    def _match_preset_load(self):
+        """선택한 프리셋으로 체크박스 상태 적용"""
+        name=self._preset_cmb.get()
+        if not name: return
+        try:
+            import json as _j
+            with open(_PRESET_FILE) as f: presets=_j.load(f)
+        except: presets={}
+        cols=presets.get(name)
+        if not cols:
+            messagebox.showwarning("주의",f"'{name}' 프리셋이 없습니다."); return
+        self._chips_clear_all()
+        applied=[]
+        for c in cols:
+            if c in self._chip_vars:
+                self._chip_vars[c].set(True)
+                applied.append(c)
+        missing=[c for c in cols if c not in self._chip_vars]
+        msg=f"프리셋 '{name}' 적용: {len(applied)}개"
+        if missing: msg+=f"  (없는 컬럼 {len(missing)}개 건너뜀)"
+        self._st(msg,C["cyan"])
+
+    def _match_preset_delete(self):
+        """선택한 프리셋 삭제"""
+        name=self._preset_cmb.get()
+        if not name: return
+        if not messagebox.askyesno("확인",f"프리셋 '{name}'을 삭제할까요?"): return
+        try:
+            import json as _j
+            with open(_PRESET_FILE) as f: presets=_j.load(f)
+            presets.pop(name,None)
+            with open(_PRESET_FILE,"w") as f: _j.dump(presets,f,ensure_ascii=False)
+            self._match_preset_refresh()
+            self._st(f"프리셋 삭제: {name}",C["muted"])
+        except Exception as e: messagebox.showerror("오류",str(e))
+
     def _match_col_preview(self):
         """선택된 컬럼의 B 데이터 미리보기 팝업"""
         if self._match_df_b is None:
@@ -3611,9 +3696,23 @@ class App(tk.Tk):
     def _apply_match(self):
         if self._match_result is None:
             messagebox.showinfo("알림","먼저 매칭을 실행하세요."); return
-        self._apply(self._match_result,"매칭 결과 적용")
+        a_cols=set(self._match_df_a.columns)
+        new_cols=[c for c in self._match_result.columns if c not in a_cols]
+        if not new_cols:
+            messagebox.showinfo("알림","매칭 결과에 추가된 컬럼이 없습니다."); return
+
+        # 현재 df_raw에 new_cols를 맨 우측에 합산
+        if self.df_raw is not None and len(self.df_raw)==len(self._match_result):
+            base=self.df_raw.reset_index(drop=True)
+            added=self._match_result[new_cols].reset_index(drop=True)
+            combined=pd.concat([base,added],axis=1)
+        else:
+            # 행 수 불일치: match_result 전체 사용 (A컬럼+B컬럼 순)
+            combined=self._match_result
+
+        self._apply(combined,"매칭 결과 적용")
         self.nb.select(0)
-        self._st("매칭 결과 → 현재 데이터 적용",C["green"])
+        self._st(f"매칭 결과 → {len(new_cols)}개 컬럼 우측 추가 완료",C["green"])
 
     # ======================== THEME ========================
     def _apply_theme(self, name):
