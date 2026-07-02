@@ -157,10 +157,19 @@ class VTree(ttk.Treeview):
         self._vd=[];self._vc=[];self._vo=0
         self._sc=None;self._sa=True
         self.bind("<Button-1>",self._hclick)
-        self.tag_configure("odd", background="#131820")
-        self.tag_configure("even",background=C["card"])
-        self.tag_configure("dup", background="#3d1515",foreground=C["red_h"])
-        self.tag_configure("blank",background="#2d2a00",foreground=C["yellow"])
+        self.bind("<<TreeviewSelect>>",self._on_sel)
+        self.tag_configure("odd",  background="#131820", foreground=C["text2"])
+        self.tag_configure("even", background=C["card"],  foreground=C["text2"])
+        self.tag_configure("sel",  background=C["accent"],foreground=C["bg"])
+        self.tag_configure("dup",  background="#3d1515",  foreground=C["red_h"])
+        self.tag_configure("blank",background="#2d2a00",  foreground=C["yellow"])
+
+    def _on_sel(self,event=None):
+        """선택된 행: sel 태그, 나머지: odd/even 복원 → 검정 깜빡임 제거"""
+        sels=set(self.selection())
+        for idx,iid in enumerate(self.get_children()):
+            base="odd" if (self._vo+idx)%2 else "even"
+            self.item(iid,tags=("sel",) if iid in sels else (base,))
 
     def load(self,df,cols):
         self._vc=[c for c in cols if c in df.columns]
@@ -486,7 +495,9 @@ class App(tk.Tk):
                     font=(FN,9))
         s.configure("Treeview.Heading",background=C["surface"],foreground=C["muted"],
                     font=(FN,9,"bold"),relief="flat")
-        s.map("Treeview",background=[("selected","#1f3a5f")])
+        s.map("Treeview",
+              background=[("selected",C["accent"])],
+              foreground=[("selected",C["bg"])])
         for w in("TCombobox","TEntry","TSpinbox"):
             s.configure(w,fieldbackground=C["card2"],background=C["card2"],
                         foreground=C["text"],insertcolor=C["text"],
@@ -3696,23 +3707,31 @@ class App(tk.Tk):
     def _apply_match(self):
         if self._match_result is None:
             messagebox.showinfo("알림","먼저 매칭을 실행하세요."); return
-        a_cols=set(self._match_df_a.columns)
-        new_cols=[c for c in self._match_result.columns if c not in a_cols]
-        if not new_cols:
-            messagebox.showinfo("알림","매칭 결과에 추가된 컬럼이 없습니다."); return
+        try:
+            a_cols=set(self._match_df_a.columns)
+            new_cols=[c for c in self._match_result.columns if c not in a_cols]
+            if not new_cols:
+                messagebox.showinfo("알림","매칭 결과에 추가된 컬럼이 없습니다.\n"
+                    "B 파일에서 가져올 컬럼을 선택했는지 확인하세요."); return
 
-        # 현재 df_raw에 new_cols를 맨 우측에 합산
-        if self.df_raw is not None and len(self.df_raw)==len(self._match_result):
-            base=self.df_raw.reset_index(drop=True)
-            added=self._match_result[new_cols].reset_index(drop=True)
-            combined=pd.concat([base,added],axis=1)
-        else:
-            # 행 수 불일치: match_result 전체 사용 (A컬럼+B컬럼 순)
-            combined=self._match_result
+            # ① df_raw 있고 행 수 일치 → 맨 우측에 새 컬럼만 concat
+            # ② 그 외 → match_result 전체 사용 (A컬럼+B컬럼 순)
+            if self.df_raw is not None and len(self.df_raw)==len(self._match_result):
+                base  = self.df_raw.reset_index(drop=True)
+                added = self._match_result[new_cols].reset_index(drop=True)
+                # 기존 df_raw에 이미 같은 이름 컬럼이 있으면 _new 접미사
+                dup = set(base.columns) & set(added.columns)
+                if dup:
+                    added = added.rename(columns={c:c+"_new" for c in dup})
+                combined = pd.concat([base, added], axis=1)
+            else:
+                combined = self._match_result.copy()
 
-        self._apply(combined,"매칭 결과 적용")
-        self.nb.select(0)
-        self._st(f"매칭 결과 → {len(new_cols)}개 컬럼 우측 추가 완료",C["green"])
+            self._apply(combined,"매칭 결과 적용")
+            self.nb.select(0)
+            self._st(f"매칭 결과 → {len(new_cols)}개 컬럼 우측 추가 완료",C["green"])
+        except Exception as e:
+            messagebox.showerror("적용 오류", str(e))
 
     # ======================== THEME ========================
     def _apply_theme(self, name):
