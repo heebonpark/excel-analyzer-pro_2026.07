@@ -3708,30 +3708,44 @@ class App(tk.Tk):
         if self._match_result is None:
             messagebox.showinfo("알림","먼저 매칭을 실행하세요."); return
         try:
-            a_cols=set(self._match_df_a.columns)
-            new_cols=[c for c in self._match_result.columns if c not in a_cols]
+            a_col_list=list(self._match_df_a.columns)
+            a_col_set =set(a_col_list)
+            new_cols  =[c for c in self._match_result.columns if c not in a_col_set]
             if not new_cols:
-                messagebox.showinfo("알림","매칭 결과에 추가된 컬럼이 없습니다.\n"
-                    "B 파일에서 가져올 컬럼을 선택했는지 확인하세요."); return
+                messagebox.showinfo("알림",
+                    "B에서 가져온 컬럼이 A와 이름이 같거나 선택된 컬럼이 없습니다.\n"
+                    "가져올 컬럼 체크박스를 선택하고 매칭을 다시 실행하세요."); return
 
-            # ① df_raw 있고 행 수 일치 → 맨 우측에 새 컬럼만 concat
-            # ② 그 외 → match_result 전체 사용 (A컬럼+B컬럼 순)
-            if self.df_raw is not None and len(self.df_raw)==len(self._match_result):
-                base  = self.df_raw.reset_index(drop=True)
-                added = self._match_result[new_cols].reset_index(drop=True)
-                # 기존 df_raw에 이미 같은 이름 컬럼이 있으면 _new 접미사
-                dup = set(base.columns) & set(added.columns)
-                if dup:
-                    added = added.rename(columns={c:c+"_new" for c in dup})
-                combined = pd.concat([base, added], axis=1)
+            # df_raw가 _match_df_a와 같은 구조(컬럼 일치)이면 우측에 concat
+            # 그 외에는 match_result 자체를 사용 (A컬럼+B새컬럼 순서 이미 정렬됨)
+            same_base=(
+                self.df_raw is not None
+                and list(self.df_raw.columns)==a_col_list
+                and len(self.df_raw)==len(self._match_result)
+            )
+            if same_base:
+                base =self.df_raw.reset_index(drop=True)
+                added=self._match_result[new_cols].reset_index(drop=True)
+                dup  =set(base.columns)&set(added.columns)
+                if dup: added=added.rename(columns={c:c+"_매칭" for c in dup})
+                combined=pd.concat([base,added],axis=1)
             else:
-                combined = self._match_result.copy()
+                combined=self._match_result.copy()
 
+            combined=self._clean(combined)
             self._apply(combined,"매칭 결과 적용")
             self.nb.select(0)
-            self._st(f"매칭 결과 → {len(new_cols)}개 컬럼 우측 추가 완료",C["green"])
+            # 새 컬럼이 맨 우측 → 자동 스크롤
+            self.after(120,lambda:self.tree.xview_moveto(1.0))
+            col_names="\n".join(f"  • {c}" for c in new_cols[:15])
+            if len(new_cols)>15: col_names+=f"\n  … 외 {len(new_cols)-15}개"
+            messagebox.showinfo("적용 완료",
+                f"매칭 결과가 현재 데이터에 적용되었습니다.\n\n"
+                f"추가된 컬럼 ({len(new_cols)}개):\n{col_names}")
+            self._st(f"매칭 적용 완료 — {len(new_cols)}개 컬럼 우측 추가",C["green"])
         except Exception as e:
-            messagebox.showerror("적용 오류", str(e))
+            import traceback
+            messagebox.showerror("적용 오류",f"{e}\n\n{traceback.format_exc()[:600]}")
 
     # ======================== THEME ========================
     def _apply_theme(self, name):
